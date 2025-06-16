@@ -2,9 +2,9 @@ package setup
 
 import (
 	"context"
+	"github.com/The-Data-Appeal-Company/go-icekit/pkg/models"
 	"github.com/sirupsen/logrus"
 	"github.com/testcontainers/testcontainers-go"
-	"go-icekit/pkg/models"
 	"os"
 )
 
