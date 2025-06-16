@@ -1,4 +1,4 @@
-module go-icekit
+module github.com/The-Data-Appeal-Company/go-icekit
 
 go 1.23.8
 
