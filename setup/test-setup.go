@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/The-Data-Appeal-Company/go-icekit/pkg/config"
-	"github.com/The-Data-Appeal-Company/go-icekit/pkg/models"
 	"github.com/docker/docker/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/network"
@@ -15,7 +13,7 @@ import (
 	"time"
 )
 
-func CreateTrinoDatabase(ctx context.Context) (*models.IcebergContainer, error) {
+func CreateTrinoDatabase(ctx context.Context) (*IcebergContainer, error) {
 	net, err := network.New(ctx, network.WithDriver("bridge"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker network: %w", err)
@@ -83,7 +81,7 @@ func CreateTrinoDatabase(ctx context.Context) (*models.IcebergContainer, error) 
 	if err != nil {
 		return nil, err
 	}
-	connection := config.TrinoConf{
+	connection := TrinoConf{
 		User:    "PLZ",
 		Host:    ip,
 		Schema:  "default",
@@ -94,7 +92,7 @@ func CreateTrinoDatabase(ctx context.Context) (*models.IcebergContainer, error) 
 	if err != nil {
 		return nil, err
 	}
-	icebergContainers := models.IcebergContainer{
+	icebergContainers := IcebergContainer{
 		Trino:       tr,
 		Db:          db,
 		Postgres:    postgresContainer,

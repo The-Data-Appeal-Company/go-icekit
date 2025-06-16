@@ -2,20 +2,19 @@ package setup
 
 import (
 	"context"
-	"github.com/The-Data-Appeal-Company/go-icekit/pkg/models"
 	"github.com/sirupsen/logrus"
 	"github.com/testcontainers/testcontainers-go"
 	"os"
 )
 
 type IIcebergRunner interface {
-	Setup(ctx context.Context) (models.IcebergContainer, error)
-	Teardown(ctx context.Context, containers models.IcebergContainer) error
+	Setup(ctx context.Context) (IcebergContainer, error)
+	Teardown(ctx context.Context, containers IcebergContainer) error
 }
 
 type IcebergRunner struct{}
 
-func (i IcebergRunner) Setup(ctx context.Context) *models.IcebergContainer {
+func (i IcebergRunner) Setup(ctx context.Context) *IcebergContainer {
 	icebergContainers, err := CreateTrinoDatabase(ctx)
 	if err != nil {
 		logrus.Error("Error creating iceberg container")
@@ -25,7 +24,7 @@ func (i IcebergRunner) Setup(ctx context.Context) *models.IcebergContainer {
 	return icebergContainers
 }
 
-func (i IcebergRunner) Teardown(ctx context.Context, containers *models.IcebergContainer) {
+func (i IcebergRunner) Teardown(ctx context.Context, containers *IcebergContainer) {
 	defer func(opts ...testcontainers.TerminateOption) {
 		terminateContainer(ctx, containers.Trino, opts...)
 		err := containers.Db.Close()
