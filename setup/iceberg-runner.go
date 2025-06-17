@@ -8,14 +8,21 @@ import (
 )
 
 type IIcebergRunner interface {
-	Setup(ctx context.Context) (IcebergContainer, error)
-	Teardown(ctx context.Context, containers IcebergContainer) error
+	Setup(ctx context.Context) *IcebergContainer
+	SetupWithCustomTrinoVersion(ctx context.Context, trinoVersion string) *IcebergContainer
+	Teardown(ctx context.Context, containers *IcebergContainer)
 }
+
+var defaultTrinoVersion = "466"
 
 type IcebergRunner struct{}
 
 func (i IcebergRunner) Setup(ctx context.Context) *IcebergContainer {
-	icebergContainers, err := CreateTrinoDatabase(ctx)
+	return i.SetupWithCustomTrinoVersion(ctx, defaultTrinoVersion)
+}
+
+func (i IcebergRunner) SetupWithCustomTrinoVersion(ctx context.Context, trinoVersion string) *IcebergContainer {
+	icebergContainers, err := CreateTrinoDatabase(ctx, trinoVersion)
 	if err != nil {
 		logrus.Error("Error creating iceberg container")
 		logrus.Error(err)

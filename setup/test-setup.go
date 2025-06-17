@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func CreateTrinoDatabase(ctx context.Context) (*IcebergContainer, error) {
+func CreateTrinoDatabase(ctx context.Context, trinoVersion string) (*IcebergContainer, error) {
 	net, err := network.New(ctx, network.WithDriver("bridge"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker network: %w", err)
@@ -52,10 +52,11 @@ func CreateTrinoDatabase(ctx context.Context) (*IcebergContainer, error) {
 
 	absPath, err := filepath.Abs("./testdata/catalogs/iceberg.properties")
 
+	trinoImage := fmt.Sprintf("trinodb/trino:%s", trinoVersion)
 	tr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Name:     "trino",
-			Image:    "trinodb/trino:466",
+			Image:    trinoImage,
 			Networks: []string{networkName},
 			Env:      trinoEnv,
 			HostConfigModifier: func(hc *container.HostConfig) {
