@@ -10,26 +10,28 @@ go-icekit configures iceberg catalog for trino using test containers. It uses:
 * Minio and Minio server to emulate amazon s3
 * Rest iceberg catalog
 
+Also, there is postgresql catalog configuration, to perform trino queries on postgres tables, using metastore container.
+
 ### Usage
 In go.mod file add dependency
 
 ```
 require(
-    github.com/The-Data-Appeal-Company/go-icekit v0.0.6
+    github.com/The-Data-Appeal-Company/go-icekit v0.1.0
 )
 ```
 
 To use it add the following import
 
 ```go
-import "github.com/The-Data-Appeal-Company/go-icekit/setup"
+import "github.com/The-Data-Appeal-Company/go-icekit/kit"
 ```
 
 To start the containers do as follows
 
 ```go
-icebergRunner := setup.IcebergRunner{}
-var containers *setup.IcebergContainer
+icebergRunner := kit.IcebergRunner{}
+var containers *kit.IcebergContainer
 containers = icebergRunner.Setup(ctx)
 ```
 IcebergContainer is a struct that contains the reference to all involved containers and connection to trino db
@@ -50,3 +52,13 @@ There is also teardown method to terminate the containers and close trino connec
 ```go
 defer icebergRunner.Teardown(ctx, containers)
 ```
+
+Is it also possible to specify trino and postgres versions using this method
+
+```go
+containers = icebergRunner.SetupWithCustomVersions(ctx, "455", "14")
+```
+
+### Default versions of images
+* trino: 466
+* postgres: 15

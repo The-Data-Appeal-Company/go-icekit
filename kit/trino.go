@@ -1,4 +1,4 @@
-package setup
+package kit
 
 import (
 	"database/sql"

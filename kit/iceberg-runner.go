@@ -1,4 +1,4 @@
-package setup
+package kit
 
 import (
 	"context"
@@ -9,20 +9,21 @@ import (
 
 type IIcebergRunner interface {
 	Setup(ctx context.Context) *IcebergContainer
-	SetupWithCustomTrinoVersion(ctx context.Context, trinoVersion string) *IcebergContainer
+	SetupWithCustomVersions(ctx context.Context, trinoVersion string, postgresVersion string) *IcebergContainer
 	Teardown(ctx context.Context, containers *IcebergContainer)
 }
 
 var defaultTrinoVersion = "466"
+var defaultPostgresVersion = "15"
 
 type IcebergRunner struct{}
 
 func (i IcebergRunner) Setup(ctx context.Context) *IcebergContainer {
-	return i.SetupWithCustomTrinoVersion(ctx, defaultTrinoVersion)
+	return i.SetupWithCustomVersions(ctx, defaultTrinoVersion, defaultPostgresVersion)
 }
 
-func (i IcebergRunner) SetupWithCustomTrinoVersion(ctx context.Context, trinoVersion string) *IcebergContainer {
-	icebergContainers, err := CreateTrinoDatabase(ctx, trinoVersion)
+func (i IcebergRunner) SetupWithCustomVersions(ctx context.Context, trinoVersion string, postgresVersion string) *IcebergContainer {
+	icebergContainers, err := CreateTrinoDatabase(ctx, trinoVersion, postgresVersion)
 	if err != nil {
 		logrus.Error("Error creating iceberg container")
 		logrus.Error(err)

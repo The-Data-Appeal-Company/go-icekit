@@ -1,4 +1,4 @@
-package setup
+package kit
 
 import (
 	"context"
@@ -10,17 +10,18 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
-func CreateTrinoDatabase(ctx context.Context, trinoVersion string) (*IcebergContainer, error) {
+func CreateTrinoDatabase(ctx context.Context, trinoVersion string, postgresVersion string) (*IcebergContainer, error) {
 	net, err := network.New(ctx, network.WithDriver("bridge"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker network: %w", err)
 	}
 	networkName := net.Name
 
-	postgresContainer, err := createPostgresMetastore(ctx, networkName)
+	postgresContainer, err := createPostgresMetastore(ctx, networkName, postgresVersion)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start postgres: %w", err)
 	}
@@ -50,7 +51,8 @@ func CreateTrinoDatabase(ctx context.Context, trinoVersion string) (*IcebergCont
 		"AWS_REGION":            "us-east-1",
 	}
 
-	absPath, err := filepath.Abs("./testdata/catalogs/iceberg.properties")
+	absPathTrinoConf := filepath.Join(getCurrentDir(), "../", "catalogs", "iceberg.properties")
+	absPathPgConf := filepath.Join(getCurrentDir(), "../", "catalogs", "postgresql.properties")
 
 	trinoImage := fmt.Sprintf("trinodb/trino:%s", trinoVersion)
 	tr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -60,7 +62,10 @@ func CreateTrinoDatabase(ctx context.Context, trinoVersion string) (*IcebergCont
 			Networks: []string{networkName},
 			Env:      trinoEnv,
 			HostConfigModifier: func(hc *container.HostConfig) {
-				hc.Binds = []string{absPath + ":/etc/trino/catalog/iceberg.properties"}
+				hc.Binds = []string{
+					absPathTrinoConf + ":/etc/trino/catalog/iceberg.properties",
+					absPathPgConf + ":/etc/trino/catalog/postgresql.properties",
+				}
 			},
 			WaitingFor: wait.ForLog("======== SERVER STARTED ========"),
 		},
@@ -177,7 +182,7 @@ func createMinioServerContainer(ctx context.Context, networkName string) (testco
 	return minioServerContainer, nil
 }
 
-func createPostgresMetastore(ctx context.Context, networkName string) (testcontainers.Container, error) {
+func createPostgresMetastore(ctx context.Context, networkName string, postgresVersion string) (testcontainers.Container, error) {
 	// dir to be used as postgres volume
 	tempDir, err := os.MkdirTemp("", "postgres_data")
 	if err != nil {
@@ -192,9 +197,10 @@ func createPostgresMetastore(ctx context.Context, networkName string) (testconta
 		"POSTGRES_HOST_AUTH_METHOD": "md5",
 	}
 
+	postgresImage := fmt.Sprintf("postgres:%s", postgresVersion)
 	req := testcontainers.ContainerRequest{
 		Name:     "postgres",
-		Image:    "postgres:15",
+		Image:    postgresImage,
 		Env:      postgresEnv,
 		Networks: []string{networkName},
 		NetworkAliases: map[string][]string{
@@ -250,4 +256,9 @@ func createRestIcebergCatalogContainer(ctx context.Context, networkName string) 
 	}
 
 	return icebergCatalogContainer, nil
+}
+
+func getCurrentDir() string {
+	_, filename, _, _ := runtime.Caller(1)
+	return filepath.Dir(filename)
 }
