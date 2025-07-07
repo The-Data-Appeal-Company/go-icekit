@@ -3,7 +3,7 @@ module github.com/The-Data-Appeal-Company/go-icekit
 go 1.23.8
 
 require (
-	github.com/docker/docker v28.3.0+incompatible
+	github.com/docker/docker v28.3.1+incompatible
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.37.0
