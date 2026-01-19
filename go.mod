@@ -4,7 +4,7 @@ go 1.23.8
 
 require (
 	github.com/docker/docker v28.3.0+incompatible
-	github.com/sirupsen/logrus v1.9.3
+	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.37.0
 	github.com/trinodb/trino-go-client v0.323.0
