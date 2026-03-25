@@ -27,12 +27,29 @@ To use it add the following import
 import "github.com/The-Data-Appeal-Company/go-icekit/kit"
 ```
 
+Current API signatures:
+
+```go
+func (i IcebergRunner) Setup(ctx context.Context) (*IcebergContainer, error)
+func (i IcebergRunner) SetupWithCustomVersions(ctx context.Context, trinoVersion string, postgresVersion string) (*IcebergContainer, error)
+func (i IcebergRunner) Teardown(ctx context.Context, containers *IcebergContainer) error
+```
+
 To start the containers do as follows
 
 ```go
 icebergRunner := kit.IcebergRunner{}
 var containers *kit.IcebergContainer
-containers = icebergRunner.Setup(ctx)
+containers, err := icebergRunner.Setup(ctx)
+if err != nil {
+    panic(err)
+}
+
+defer func() {
+    if err := icebergRunner.Teardown(ctx, containers); err != nil {
+        panic(err)
+    }
+}()
 ```
 IcebergContainer is a struct that contains the reference to all involved containers and connection to trino db
 
@@ -44,19 +61,17 @@ type IcebergContainer struct {
 	Minio       testcontainers.Container
 	MinioServer testcontainers.Container
 	RestIceberg testcontainers.Container
+	Network     testcontainers.Network
 }
-```
-
-There is also teardown method to terminate the containers and close trino connection
-
-```go
-defer icebergRunner.Teardown(ctx, containers)
 ```
 
 Is it also possible to specify trino and postgres versions using this method
 
 ```go
-containers = icebergRunner.SetupWithCustomVersions(ctx, "455", "14")
+containers, err = icebergRunner.SetupWithCustomVersions(ctx, "455", "14")
+if err != nil {
+    panic(err)
+}
 ```
 
 ### Default versions of images

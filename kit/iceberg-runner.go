@@ -2,15 +2,17 @@ package kit
 
 import (
 	"context"
+	"fmt"
+	"time"
+
 	"github.com/sirupsen/logrus"
 	"github.com/testcontainers/testcontainers-go"
-	"os"
 )
 
 type IIcebergRunner interface {
-	Setup(ctx context.Context) *IcebergContainer
-	SetupWithCustomVersions(ctx context.Context, trinoVersion string, postgresVersion string) *IcebergContainer
-	Teardown(ctx context.Context, containers *IcebergContainer)
+	Setup(ctx context.Context) (*IcebergContainer, error)
+	SetupWithCustomVersions(ctx context.Context, trinoVersion string, postgresVersion string) (*IcebergContainer, error)
+	Teardown(ctx context.Context, containers *IcebergContainer) error
 }
 
 var defaultTrinoVersion = "466"
@@ -18,37 +20,56 @@ var defaultPostgresVersion = "15"
 
 type IcebergRunner struct{}
 
-func (i IcebergRunner) Setup(ctx context.Context) *IcebergContainer {
+func (i IcebergRunner) Setup(ctx context.Context) (*IcebergContainer, error) {
 	return i.SetupWithCustomVersions(ctx, defaultTrinoVersion, defaultPostgresVersion)
 }
 
-func (i IcebergRunner) SetupWithCustomVersions(ctx context.Context, trinoVersion string, postgresVersion string) *IcebergContainer {
+func (i IcebergRunner) SetupWithCustomVersions(ctx context.Context, trinoVersion string, postgresVersion string) (*IcebergContainer, error) {
 	icebergContainers, err := CreateTrinoDatabase(ctx, trinoVersion, postgresVersion)
 	if err != nil {
-		logrus.Error("Error creating iceberg container")
-		logrus.Error(err)
-		os.Exit(1)
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"trino_version":    trinoVersion,
+			"postgres_version": postgresVersion,
+		}).Error("failed to setup iceberg containers")
+		return nil, fmt.Errorf("error creating iceberg container: %w", err)
 	}
-	return icebergContainers
+	return icebergContainers, nil
 }
 
-func (i IcebergRunner) Teardown(ctx context.Context, containers *IcebergContainer) {
-	defer func(opts ...testcontainers.TerminateOption) {
-		terminateContainer(ctx, containers.Trino, opts...)
-		err := containers.Db.Close()
-		if err != nil {
-			logrus.Error(err)
-		}
-		terminateContainer(ctx, containers.Postgres, opts...)
-		terminateContainer(ctx, containers.Minio, opts...)
-		terminateContainer(ctx, containers.MinioServer, opts...)
-		terminateContainer(ctx, containers.RestIceberg, opts...)
-	}()
-}
+func (i IcebergRunner) Teardown(ctx context.Context, containers *IcebergContainer) error {
+	if containers == nil {
+		return nil
+	}
 
-func terminateContainer(ctx context.Context, container testcontainers.Container, opts ...testcontainers.TerminateOption) {
-	err := container.Terminate(ctx, opts...)
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+
+	teardownCtx, cancel := context.WithTimeout(baseCtx, 90*time.Second)
+	defer cancel()
+
+	err := rollbackSetup(teardownCtx, containers.Db, containers.Network, []resourceTerminator{
+		containers.Postgres,
+		containers.Minio,
+		containers.MinioServer,
+		containers.RestIceberg,
+		containers.Trino,
+	})
 	if err != nil {
-		logrus.Error(err)
+		logrus.WithError(err).Error("failed to teardown one or more iceberg resources")
 	}
+	return err
+}
+
+func terminateContainer(ctx context.Context, container resourceTerminator, opts ...testcontainers.TerminateOption) error {
+	if container == nil {
+		return nil
+	}
+
+	if len(opts) == 0 {
+		return container.Terminate(ctx)
+	}
+
+	return container.Terminate(ctx, opts...)
 }

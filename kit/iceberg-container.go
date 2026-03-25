@@ -2,6 +2,7 @@ package kit
 
 import (
 	"database/sql"
+
 	"github.com/testcontainers/testcontainers-go"
 )
 
@@ -12,4 +13,5 @@ type IcebergContainer struct {
 	Minio       testcontainers.Container
 	MinioServer testcontainers.Container
 	RestIceberg testcontainers.Container
+	Network     testcontainers.Network
 }

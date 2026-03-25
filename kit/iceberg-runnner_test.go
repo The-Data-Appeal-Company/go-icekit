@@ -3,6 +3,7 @@ package kit
 import (
 	"context"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	_ "github.com/trinodb/trino-go-client/trino"
 	"testing"
 )
@@ -10,7 +11,8 @@ import (
 func Test_ShouldSetupTrinoContainer(t *testing.T) {
 	ctx := context.Background()
 	icebergRunner := IcebergRunner{}
-	containers := icebergRunner.Setup(ctx)
+	containers, err := icebergRunner.Setup(ctx)
+	require.NoError(t, err)
 
 	assert.True(t, containers.Postgres.IsRunning())
 	assert.True(t, containers.Minio.IsRunning())
@@ -18,13 +20,14 @@ func Test_ShouldSetupTrinoContainer(t *testing.T) {
 	assert.True(t, containers.RestIceberg.IsRunning())
 	assert.True(t, containers.Trino.IsRunning())
 
-	icebergRunner.Teardown(ctx, containers)
+	assert.NoError(t, icebergRunner.Teardown(ctx, containers))
 }
 
 func Test_ShouldSetupTrinoContainerWithCustomTrinoVersion(t *testing.T) {
 	ctx := context.Background()
 	icebergRunner := IcebergRunner{}
-	containers := icebergRunner.SetupWithCustomVersions(ctx, "419", defaultPostgresVersion)
+	containers, err := icebergRunner.SetupWithCustomVersions(ctx, "419", defaultPostgresVersion)
+	require.NoError(t, err)
 
 	assert.True(t, containers.Postgres.IsRunning())
 	assert.True(t, containers.Minio.IsRunning())
@@ -32,13 +35,14 @@ func Test_ShouldSetupTrinoContainerWithCustomTrinoVersion(t *testing.T) {
 	assert.True(t, containers.RestIceberg.IsRunning())
 	assert.True(t, containers.Trino.IsRunning())
 
-	icebergRunner.Teardown(ctx, containers)
+	assert.NoError(t, icebergRunner.Teardown(ctx, containers))
 }
 
 func Test_ShouldSetupTrinoContainerWithCustomPostgresVersion(t *testing.T) {
 	ctx := context.Background()
 	icebergRunner := IcebergRunner{}
-	containers := icebergRunner.SetupWithCustomVersions(ctx, defaultTrinoVersion, "13")
+	containers, err := icebergRunner.SetupWithCustomVersions(ctx, defaultTrinoVersion, "13")
+	require.NoError(t, err)
 
 	assert.True(t, containers.Postgres.IsRunning())
 	assert.True(t, containers.Minio.IsRunning())
@@ -46,13 +50,14 @@ func Test_ShouldSetupTrinoContainerWithCustomPostgresVersion(t *testing.T) {
 	assert.True(t, containers.RestIceberg.IsRunning())
 	assert.True(t, containers.Trino.IsRunning())
 
-	icebergRunner.Teardown(ctx, containers)
+	assert.NoError(t, icebergRunner.Teardown(ctx, containers))
 }
 
 func Test_ShouldSetupTrinoContainerWithCustomVersions(t *testing.T) {
 	ctx := context.Background()
 	icebergRunner := IcebergRunner{}
-	containers := icebergRunner.SetupWithCustomVersions(ctx, "419", "13")
+	containers, err := icebergRunner.SetupWithCustomVersions(ctx, "419", "13")
+	require.NoError(t, err)
 
 	assert.True(t, containers.Postgres.IsRunning())
 	assert.True(t, containers.Minio.IsRunning())
@@ -60,5 +65,12 @@ func Test_ShouldSetupTrinoContainerWithCustomVersions(t *testing.T) {
 	assert.True(t, containers.RestIceberg.IsRunning())
 	assert.True(t, containers.Trino.IsRunning())
 
-	icebergRunner.Teardown(ctx, containers)
+	assert.NoError(t, icebergRunner.Teardown(ctx, containers))
+}
+
+func Test_ShouldTeardownNilContainersWithoutError(t *testing.T) {
+	ctx := context.Background()
+	icebergRunner := IcebergRunner{}
+
+	assert.NoError(t, icebergRunner.Teardown(ctx, nil))
 }

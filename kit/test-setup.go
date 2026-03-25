@@ -4,46 +4,71 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/docker/docker/api/types/container"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/network"
-	"github.com/testcontainers/testcontainers-go/wait"
-	"os"
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/sirupsen/logrus"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/network"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func CreateTrinoDatabase(ctx context.Context, trinoVersion string, postgresVersion string) (*IcebergContainer, error) {
-	net, err := network.New(ctx, network.WithDriver("bridge"))
+	setupCtx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	defer cancel()
+
+	net, err := network.New(setupCtx, network.WithDriver("bridge"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker network: %w", err)
 	}
 	networkName := net.Name
+	startedContainers := make([]resourceTerminator, 0, 5)
 
-	postgresContainer, err := createPostgresMetastore(ctx, networkName, postgresVersion)
+	var trinoDB *sql.DB
+	setupComplete := false
+	defer func() {
+		if setupComplete {
+			return
+		}
+
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer rollbackCancel()
+
+		if err := rollbackSetup(rollbackCtx, trinoDB, net, startedContainers); err != nil {
+			logrus.WithError(err).Error("failed rollback after setup error")
+		}
+	}()
+
+	postgresContainer, err := createPostgresMetastore(setupCtx, networkName, postgresVersion)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start postgres: %w", err)
 	}
-	state, err := postgresContainer.State(ctx)
+	startedContainers = append(startedContainers, postgresContainer)
+
+	state, err := postgresContainer.State(setupCtx)
 	if err != nil || !state.Running {
 		return nil, fmt.Errorf("postgres is not running or unhealthy: %v", err)
 	}
 
-	minioContainer, err := createMinioContainer(ctx, networkName)
+	minioContainer, err := createMinioContainer(setupCtx, networkName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create minio container: %w", err)
 	}
+	startedContainers = append(startedContainers, minioContainer)
 
-	minioServerContainer, err := createMinioServerContainer(ctx, networkName)
+	minioServerContainer, err := createMinioServerContainer(setupCtx, networkName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create minio server container: %w", err)
 	}
+	startedContainers = append(startedContainers, minioServerContainer)
 
-	restIcebergContainer, err := createRestIcebergCatalogContainer(ctx, networkName)
+	restIcebergContainer, err := createRestIcebergCatalogContainer(setupCtx, networkName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rest-iceberg catalog container: %w", err)
 	}
+	startedContainers = append(startedContainers, restIcebergContainer)
 
 	trinoEnv := map[string]string{
 		"AWS_ACCESS_KEY_ID":     "admin",
@@ -55,37 +80,38 @@ func CreateTrinoDatabase(ctx context.Context, trinoVersion string, postgresVersi
 	absPathPgConf := filepath.Join(getCurrentDir(), "../", "catalogs", "postgresql.properties")
 
 	trinoImage := fmt.Sprintf("trinodb/trino:%s", trinoVersion)
-	tr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	tr, err := testcontainers.GenericContainer(setupCtx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Name:     "trino",
-			Image:    trinoImage,
-			Networks: []string{networkName},
-			Env:      trinoEnv,
+			Image:        trinoImage,
+			Networks:     []string{networkName},
+			Env:          trinoEnv,
+			ExposedPorts: []string{"8080/tcp"},
+			NetworkAliases: map[string][]string{
+				networkName: []string{"trino"},
+			},
 			HostConfigModifier: func(hc *container.HostConfig) {
 				hc.Binds = []string{
 					absPathTrinoConf + ":/etc/trino/catalog/iceberg.properties",
 					absPathPgConf + ":/etc/trino/catalog/postgresql.properties",
 				}
 			},
-			WaitingFor: wait.ForLog("======== SERVER STARTED ========"),
+			WaitingFor: wait.ForLog("======== SERVER STARTED ========").
+				WithStartupTimeout(4 * time.Minute),
 		},
-		Started: false,
+		Started: true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to start trino: %w", err)
 	}
-	err = tr.Start(ctx)
-	time.Sleep(1000 * time.Millisecond)
+	startedContainers = append(startedContainers, tr)
+
+	ip, err := tr.Host(setupCtx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to resolve trino host: %w", err)
 	}
-	ip, err := tr.Host(ctx)
+	port, err := tr.MappedPort(setupCtx, "8080/tcp")
 	if err != nil {
-		return nil, err
-	}
-	port, err := tr.MappedPort(ctx, "8080")
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to resolve trino port: %w", err)
 	}
 	connection := TrinoConf{
 		User:    "PLZ",
@@ -96,8 +122,13 @@ func CreateTrinoDatabase(ctx context.Context, trinoVersion string, postgresVersi
 	}
 	db, err := sql.Open("trino", connection.ConnectionString())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open trino connection: %w", err)
 	}
+	trinoDB = db
+	if err := waitForTrinoConnection(setupCtx, db, 90*time.Second); err != nil {
+		return nil, fmt.Errorf("trino is not ready for connections: %w", err)
+	}
+
 	icebergContainers := IcebergContainer{
 		Trino:       tr,
 		Db:          db,
@@ -105,17 +136,13 @@ func CreateTrinoDatabase(ctx context.Context, trinoVersion string, postgresVersi
 		Minio:       minioContainer,
 		MinioServer: minioServerContainer,
 		RestIceberg: restIcebergContainer,
+		Network:     net,
 	}
+	setupComplete = true
 	return &icebergContainers, nil
 }
 
 func createMinioContainer(ctx context.Context, networkName string) (testcontainers.Container, error) {
-	// dir to be used as minio volume
-	tempDir, err := os.MkdirTemp("", "minio-data")
-	if err != nil {
-		return nil, err
-	}
-
 	minioEnv := map[string]string{
 		"MINIO_ROOT_USER":     "admin",
 		"MINIO_ROOT_PASSWORD": "password",
@@ -123,19 +150,15 @@ func createMinioContainer(ctx context.Context, networkName string) (testcontaine
 	}
 
 	req := testcontainers.ContainerRequest{
-		Name:         "minio",
 		Image:        "minio/minio:RELEASE.2025-05-24T17-08-30Z",
 		ExposedPorts: []string{"9000/tcp"},
 		Env:          minioEnv,
 		Networks:     []string{networkName},
 		NetworkAliases: map[string][]string{
-			networkName: {"warehouse.minio"},
+			networkName: []string{"minio", "warehouse.minio"},
 		},
 		Cmd:        []string{"server", "/data", "--console-address", ":9001"},
-		WaitingFor: wait.ForListeningPort("9000/tcp"),
-		HostConfigModifier: func(hc *container.HostConfig) {
-			hc.Binds = []string{tempDir + ":/data"}
-		},
+		WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
 	}
 
 	minioContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -157,18 +180,24 @@ func createMinioServerContainer(ctx context.Context, networkName string) (testco
 	}
 	mcCmd := []string{
 		"/bin/sh", "-c",
-		"until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;" +
-			"/usr/bin/mc mb --ignore-existing minio/warehouse;" +
-			"/usr/bin/mc policy set public minio/warehouse;" +
+		"set -e; " +
+			"until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done; " +
+			"/usr/bin/mc mb --ignore-existing minio/warehouse; " +
+			"/usr/bin/mc policy set public minio/warehouse; " +
+			"echo 'MINIO_BOOTSTRAP_DONE'; " +
 			"tail -f /dev/null",
 	}
 
 	req := testcontainers.ContainerRequest{
-		Name:       "mc",
-		Image:      "minio/mc:RELEASE.2025-05-21T01-59-54Z.hotfix.e98f1ead",
-		Networks:   []string{networkName},
-		Env:        mcEnv,
+		Image:    "minio/mc:RELEASE.2025-05-21T01-59-54Z.hotfix.e98f1ead",
+		Networks: []string{networkName},
+		Env:      mcEnv,
+		NetworkAliases: map[string][]string{
+			networkName: []string{"mc"},
+		},
 		Entrypoint: mcCmd,
+		WaitingFor: wait.ForLog("MINIO_BOOTSTRAP_DONE").
+			WithStartupTimeout(2 * time.Minute),
 	}
 
 	minioServerContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -183,12 +212,6 @@ func createMinioServerContainer(ctx context.Context, networkName string) (testco
 }
 
 func createPostgresMetastore(ctx context.Context, networkName string, postgresVersion string) (testcontainers.Container, error) {
-	// dir to be used as postgres volume
-	tempDir, err := os.MkdirTemp("", "postgres_data")
-	if err != nil {
-		return nil, err
-	}
-
 	postgresEnv := map[string]string{
 		"PGDATA":                    "/var/lib/postgresql/data",
 		"POSTGRES_USER":             "admin",
@@ -199,18 +222,15 @@ func createPostgresMetastore(ctx context.Context, networkName string, postgresVe
 
 	postgresImage := fmt.Sprintf("postgres:%s", postgresVersion)
 	req := testcontainers.ContainerRequest{
-		Name:     "postgres",
-		Image:    postgresImage,
-		Env:      postgresEnv,
-		Networks: []string{networkName},
-		NetworkAliases: map[string][]string{
-			networkName: {"postgres"},
-		},
+		Image:        postgresImage,
+		Env:          postgresEnv,
+		Networks:     []string{networkName},
 		ExposedPorts: []string{"5432/tcp"},
-		WaitingFor:   wait.ForListeningPort("5432"),
-		HostConfigModifier: func(hc *container.HostConfig) {
-			hc.Binds = []string{tempDir + ":/var/lib/postgresql/data"}
+		NetworkAliases: map[string][]string{
+			networkName: []string{"postgres"},
 		},
+		WaitingFor: wait.ForLog("database system is ready to accept connections").
+			WithStartupTimeout(2 * time.Minute),
 	}
 
 	pgContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -239,12 +259,14 @@ func createRestIcebergCatalogContainer(ctx context.Context, networkName string) 
 	}
 
 	req := testcontainers.ContainerRequest{
-		Name:         "iceberg-rest",
-		Image:        "tabulario/iceberg-rest:1.6.0",
-		Env:          restEnv,
-		Networks:     []string{networkName},
+		Image:    "tabulario/iceberg-rest:1.6.0",
+		Env:      restEnv,
+		Networks: []string{networkName},
+		NetworkAliases: map[string][]string{
+			networkName: []string{"iceberg-rest"},
+		},
 		ExposedPorts: []string{"8181/tcp"},
-		WaitingFor:   wait.ForLog("Started").WithStartupTimeout(30 * time.Second),
+		WaitingFor:   wait.ForListeningPort("8181/tcp").WithStartupTimeout(2 * time.Minute),
 	}
 
 	icebergCatalogContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -261,4 +283,24 @@ func createRestIcebergCatalogContainer(ctx context.Context, networkName string) 
 func getCurrentDir() string {
 	_, filename, _, _ := runtime.Caller(1)
 	return filepath.Dir(filename)
+}
+
+func waitForTrinoConnection(ctx context.Context, db *sql.DB, timeout time.Duration) error {
+	deadlineCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if err := db.PingContext(deadlineCtx); err == nil {
+			return nil
+		}
+
+		select {
+		case <-deadlineCtx.Done():
+			return deadlineCtx.Err()
+		case <-ticker.C:
+		}
+	}
 }
