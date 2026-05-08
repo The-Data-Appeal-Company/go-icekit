@@ -3,6 +3,7 @@ package kit
 import (
 	"context"
 	"errors"
+	"reflect"
 
 	"github.com/sirupsen/logrus"
 	"github.com/testcontainers/testcontainers-go"
@@ -23,7 +24,7 @@ type resourceCloser interface {
 func rollbackSetup(ctx context.Context, db resourceCloser, net networkRemover, resources []resourceTerminator) error {
 	var cleanupErr error
 
-	if db != nil {
+	if !isNilResourceCloser(db) {
 		if err := db.Close(); err != nil {
 			logrus.WithError(err).Error("failed to close trino database during cleanup")
 			cleanupErr = errors.Join(cleanupErr, err)
@@ -45,4 +46,18 @@ func rollbackSetup(ctx context.Context, db resourceCloser, net networkRemover, r
 	}
 
 	return cleanupErr
+}
+
+func isNilResourceCloser(db resourceCloser) bool {
+	if db == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(db)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

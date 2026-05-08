@@ -31,6 +31,15 @@ func (f fakeCloser) Close() error {
 	return f.retErr
 }
 
+type fakePointerCloser struct {
+	calls *[]string
+}
+
+func (f *fakePointerCloser) Close() error {
+	*f.calls = append(*f.calls, "db:close")
+	return nil
+}
+
 type fakeNetwork struct {
 	calls  *[]string
 	retErr error
@@ -97,6 +106,24 @@ func TestRollbackSetup_CleanupContinuesAndAggregatesErrors(t *testing.T) {
 		"terminate:rest",
 		"terminate:minio",
 		"terminate:postgres",
+		"network:remove",
+	}, calls)
+}
+
+func TestRollbackSetup_TypedNilCloserIsIgnored(t *testing.T) {
+	ctx := context.Background()
+	var calls []string
+	var db *fakePointerCloser
+
+	err := rollbackSetup(
+		ctx,
+		db,
+		fakeNetwork{calls: &calls},
+		nil,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
 		"network:remove",
 	}, calls)
 }
