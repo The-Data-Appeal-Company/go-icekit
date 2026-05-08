@@ -183,13 +183,13 @@ func createMinioServerContainer(ctx context.Context, networkName string) (testco
 		"set -e; " +
 			"until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done; " +
 			"/usr/bin/mc mb --ignore-existing minio/warehouse; " +
-			"/usr/bin/mc policy set public minio/warehouse; " +
+			"/usr/bin/mc anonymous set public minio/warehouse; " +
 			"echo 'MINIO_BOOTSTRAP_DONE'; " +
 			"tail -f /dev/null",
 	}
 
 	req := testcontainers.ContainerRequest{
-		Image:    "minio/mc:RELEASE.2025-05-21T01-59-54Z.hotfix.e98f1ead",
+		Image:    "minio/mc:RELEASE.2025-05-21T01-59-54Z",
 		Networks: []string{networkName},
 		Env:      mcEnv,
 		NetworkAliases: map[string][]string{
