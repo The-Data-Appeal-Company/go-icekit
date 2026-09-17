@@ -150,7 +150,7 @@ func createMinioContainer(ctx context.Context, networkName string) (testcontaine
 	}
 
 	req := testcontainers.ContainerRequest{
-		Image:        "minio/minio:RELEASE.2025-05-24T17-08-30Z",
+		Image:        "quay.io/minio/minio:RELEASE.2025-05-24T17-08-30Z",
 		ExposedPorts: []string{"9000/tcp"},
 		Env:          minioEnv,
 		Networks:     []string{networkName},
@@ -189,7 +189,7 @@ func createMinioServerContainer(ctx context.Context, networkName string) (testco
 	}
 
 	req := testcontainers.ContainerRequest{
-		Image:    "minio/mc:RELEASE.2025-05-21T01-59-54Z",
+		Image:    "quay.io/minio/mc:RELEASE.2025-05-21T01-59-54Z",
 		Networks: []string{networkName},
 		Env:      mcEnv,
 		NetworkAliases: map[string][]string{
