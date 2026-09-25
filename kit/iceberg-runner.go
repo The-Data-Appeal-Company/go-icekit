@@ -51,8 +51,7 @@ func (i IcebergRunner) Teardown(ctx context.Context, containers *IcebergContaine
 
 	err := rollbackSetup(teardownCtx, containers.Db, containers.Network, []resourceTerminator{
 		containers.Postgres,
-		containers.Minio,
-		containers.MinioServer,
+		containers.ObjectStore,
 		containers.RestIceberg,
 		containers.Trino,
 	})

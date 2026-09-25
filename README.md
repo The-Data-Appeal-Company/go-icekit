@@ -7,7 +7,7 @@
 ### Simple configurator for trino iceberg catalog in test containers
 go-icekit configures iceberg catalog for trino using test containers. It uses:
 * Postgres as metastore
-* Minio and Minio server to emulate amazon s3
+* RustFS to emulate amazon s3 (MinIO until v0.1.3: its public images are no longer available)
 * Rest iceberg catalog
 
 Also, there is postgresql catalog configuration, to perform trino queries on postgres tables, using metastore container.
@@ -58,8 +58,7 @@ type IcebergContainer struct {
 	Trino       testcontainers.Container
 	Db          *sql.DB
 	Postgres    testcontainers.Container
-	Minio       testcontainers.Container
-	MinioServer testcontainers.Container
+	ObjectStore testcontainers.Container
 	RestIceberg testcontainers.Container
 	Network     testcontainers.Network
 }
@@ -77,3 +76,15 @@ if err != nil {
 ### Default versions of images
 * trino: 466
 * postgres: 15
+* object store: `rustfs/rustfs:1.0.0`
+
+The object store image can be overridden with the `ICEKIT_OBJECT_STORE_IMAGE` environment variable,
+e.g. to pull it from a mirror in a private registry:
+
+```
+ICEKIT_OBJECT_STORE_IMAGE=<account>.dkr.ecr.<region>.amazonaws.com/mirror/rustfs:1.0.0 go test ./...
+```
+
+### Upgrading from v0.1.x
+`IcebergContainer.Minio` and `IcebergContainer.MinioServer` are replaced by `IcebergContainer.ObjectStore`:
+the bucket is now created inside the object store container, so there is no second container.
