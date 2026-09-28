@@ -10,8 +10,7 @@ type IcebergContainer struct {
 	Trino       testcontainers.Container
 	Db          *sql.DB
 	Postgres    testcontainers.Container
-	Minio       testcontainers.Container
-	MinioServer testcontainers.Container
+	ObjectStore testcontainers.Container
 	RestIceberg testcontainers.Container
 	Network     testcontainers.Network
 }

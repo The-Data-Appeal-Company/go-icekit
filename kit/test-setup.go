@@ -4,13 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/sirupsen/logrus"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -52,17 +56,15 @@ func CreateTrinoDatabase(ctx context.Context, trinoVersion string, postgresVersi
 		return nil, fmt.Errorf("postgres is not running or unhealthy: %v", err)
 	}
 
-	minioContainer, err := createMinioContainer(setupCtx, networkName)
+	objectStoreContainer, err := createObjectStoreContainer(setupCtx, networkName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create minio container: %w", err)
+		return nil, fmt.Errorf("failed to create object store container: %w", err)
 	}
-	startedContainers = append(startedContainers, minioContainer)
+	startedContainers = append(startedContainers, objectStoreContainer)
 
-	minioServerContainer, err := createMinioServerContainer(setupCtx, networkName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create minio server container: %w", err)
+	if err := createBucket(setupCtx, objectStoreContainer, warehouseBucket); err != nil {
+		return nil, fmt.Errorf("failed to create %s bucket: %w", warehouseBucket, err)
 	}
-	startedContainers = append(startedContainers, minioServerContainer)
 
 	restIcebergContainer, err := createRestIcebergCatalogContainer(setupCtx, networkName)
 	if err != nil {
@@ -133,8 +135,7 @@ func CreateTrinoDatabase(ctx context.Context, trinoVersion string, postgresVersi
 		Trino:       tr,
 		Db:          db,
 		Postgres:    postgresContainer,
-		Minio:       minioContainer,
-		MinioServer: minioServerContainer,
+		ObjectStore: objectStoreContainer,
 		RestIceberg: restIcebergContainer,
 		Network:     net,
 	}
@@ -142,65 +143,43 @@ func CreateTrinoDatabase(ctx context.Context, trinoVersion string, postgresVersi
 	return &icebergContainers, nil
 }
 
-func createMinioContainer(ctx context.Context, networkName string) (testcontainers.Container, error) {
-	minioEnv := map[string]string{
-		"MINIO_ROOT_USER":     "admin",
-		"MINIO_ROOT_PASSWORD": "password",
-		"MINIO_DOMAIN":        "minio",
-	}
+const warehouseBucket = "warehouse"
 
-	req := testcontainers.ContainerRequest{
-		Image:        "quay.io/minio/minio:RELEASE.2025-05-24T17-08-30Z",
-		ExposedPorts: []string{"9000/tcp"},
-		Env:          minioEnv,
-		Networks:     []string{networkName},
-		NetworkAliases: map[string][]string{
-			networkName: []string{"minio", "warehouse.minio"},
-		},
-		Cmd:        []string{"server", "/data", "--console-address", ":9001"},
-		WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
-	}
+// defaultObjectStoreImage is the S3-compatible server that stores the Iceberg data. MinIO withdrew its
+// public images in 2026, so the kit uses RustFS. ICEKIT_OBJECT_STORE_IMAGE overrides it, e.g. with a
+// mirror in a private registry.
+const defaultObjectStoreImage = "rustfs/rustfs:1.0.0"
 
-	minioContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		return nil, err
+func objectStoreImage() string {
+	if image := os.Getenv("ICEKIT_OBJECT_STORE_IMAGE"); image != "" {
+		return image
 	}
-
-	return minioContainer, nil
+	return defaultObjectStoreImage
 }
 
-func createMinioServerContainer(ctx context.Context, networkName string) (testcontainers.Container, error) {
-	mcEnv := map[string]string{
-		"AWS_ACCESS_KEY_ID":     "admin",
-		"AWS_SECRET_ACCESS_KEY": "password",
-		"AWS_REGION":            "us-east-1",
-	}
-	mcCmd := []string{
-		"/bin/sh", "-c",
-		"set -e; " +
-			"until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done; " +
-			"/usr/bin/mc mb --ignore-existing minio/warehouse; " +
-			"/usr/bin/mc anonymous set public minio/warehouse; " +
-			"echo 'MINIO_BOOTSTRAP_DONE'; " +
-			"tail -f /dev/null",
+func createObjectStoreContainer(ctx context.Context, networkName string) (testcontainers.Container, error) {
+	objectStoreEnv := map[string]string{
+		"RUSTFS_ACCESS_KEY": "admin",
+		"RUSTFS_SECRET_KEY": "password",
+		// serve virtual-hosted-style requests (<bucket>.minio), used by the rest catalog
+		"RUSTFS_SERVER_DOMAINS":         "minio",
+		"RUSTFS_OBS_LOG_STDOUT_ENABLED": "true",
 	}
 
 	req := testcontainers.ContainerRequest{
-		Image:    "quay.io/minio/mc:RELEASE.2025-05-21T01-59-54Z",
-		Networks: []string{networkName},
-		Env:      mcEnv,
+		Image:        objectStoreImage(),
+		ExposedPorts: []string{"9000/tcp"},
+		Env:          objectStoreEnv,
+		Networks:     []string{networkName},
+		// the "minio" host names are kept so that the catalog configurations stay the same
 		NetworkAliases: map[string][]string{
-			networkName: []string{"mc"},
+			networkName: []string{"minio", warehouseBucket + ".minio"},
 		},
-		Entrypoint: mcCmd,
-		WaitingFor: wait.ForLog("MINIO_BOOTSTRAP_DONE").
+		WaitingFor: wait.ForHTTP("/health/ready").WithPort("9000/tcp").
 			WithStartupTimeout(2 * time.Minute),
 	}
 
-	minioServerContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	objectStoreContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
@@ -208,7 +187,26 @@ func createMinioServerContainer(ctx context.Context, networkName string) (testco
 		return nil, err
 	}
 
-	return minioServerContainer, nil
+	return objectStoreContainer, nil
+}
+
+// createBucket creates the bucket, if missing, with a SigV4-signed request sent from inside the object
+// store container, so no extra container or S3 client is needed.
+func createBucket(ctx context.Context, objectStore testcontainers.Container, bucket string) error {
+	url := fmt.Sprintf("http://localhost:9000/%s", bucket)
+	script := fmt.Sprintf(
+		"curl -sf -o /dev/null --aws-sigv4 aws:amz:us-east-1:s3 --user admin:password --head %[1]s || "+
+			"curl -sSf --aws-sigv4 aws:amz:us-east-1:s3 --user admin:password -X PUT %[1]s", url)
+
+	code, output, err := objectStore.Exec(ctx, []string{"sh", "-c", script}, tcexec.Multiplexed())
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		msg, _ := io.ReadAll(output)
+		return fmt.Errorf("exit code %d: %s", code, strings.TrimSpace(string(msg)))
+	}
+	return nil
 }
 
 func createPostgresMetastore(ctx context.Context, networkName string, postgresVersion string) (testcontainers.Container, error) {
@@ -293,7 +291,10 @@ func waitForTrinoConnection(ctx context.Context, db *sql.DB, timeout time.Durati
 	defer ticker.Stop()
 
 	for {
-		if err := db.PingContext(deadlineCtx); err == nil {
+		// a ping succeeds as soon as the coordinator answers, before any node can run a query:
+		// wait for a real query instead
+		var one int
+		if err := db.QueryRowContext(deadlineCtx, "SELECT 1").Scan(&one); err == nil {
 			return nil
 		}
 
